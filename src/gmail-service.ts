@@ -206,6 +206,17 @@ export class GmailService {
     return { success: true, labelId };
   }
 
+  // -----------------------------------------------------------------------
+  // list_labels
+  // -----------------------------------------------------------------------
+
+  async listLabels(): Promise<Array<{ id: string; name: string; type: string }>> {
+    const res = await this.gmail.users.labels.list({ userId: "me" });
+    return (res.data.labels ?? [])
+      .map((l) => ({ id: l.id ?? "", name: l.name ?? "", type: l.type ?? "" }))
+      .sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
+  }
+
   private async getOrCreateLabel(labelName: string): Promise<string> {
     // Check existing labels
     const res = await this.gmail.users.labels.list({ userId: "me" });

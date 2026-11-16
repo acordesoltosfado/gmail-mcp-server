@@ -60,6 +60,7 @@ This Gmail MCP server turns any MCP-compatible AI client into a full-featured em
 | `list_emails` | Search and list emails using Gmail query syntax. Supports `account="all"` |
 | `get_email` | Get full email content, headers, and parsed unsubscribe links |
 | `archive_email` | Archive an email by removing it from the inbox |
+| `list_labels` | List an account's labels (id, name, type), or every account's with `all` |
 | `apply_label` | Apply a label to an email. Creates the label if it doesn't exist |
 | `create_draft` | Create a draft (new or a reply in the thread). Nothing is sent |
 | `send_email` | Send a new email or reply, or send an existing draft by `draft_id` |

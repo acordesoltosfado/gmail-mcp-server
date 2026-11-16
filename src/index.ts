@@ -220,6 +220,34 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ---- list_labels ----
+  server.tool(
+    "list_labels",
+    "List the Gmail labels of an account (system labels like INBOX, and user labels). Returns each label's id, name and type, so the labelIds on emails can be read as names. Use account='all' for every connected account.",
+    {
+      account: z
+        .string()
+        .describe("Email address of the account, or 'all' for every connected account"),
+    },
+    async ({ account }) => {
+      const accounts = resolveAccounts(account);
+      const results: Array<{ account: string; labels?: any[]; error?: string }> = [];
+
+      for (const email of accounts) {
+        try {
+          const gmail = await getGmailServiceForAccount(email);
+          results.push({ account: email, labels: await gmail.listLabels() });
+        } catch (err: any) {
+          results.push({ account: email, error: err?.message ?? String(err) });
+        }
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
+      };
+    }
+  );
+
   // ---- apply_label ----
   server.tool(
     "apply_label",
