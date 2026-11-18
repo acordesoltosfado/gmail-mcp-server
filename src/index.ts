@@ -6,6 +6,7 @@ import { z } from "zod";
 import { timingSafeEqual } from "node:crypto";
 import { GmailService } from "./gmail-service.js";
 import { TokenStore } from "./token-store.js";
+import { checkRecipients, parseAllowlist, MAX_FORWARD_RECIPIENTS } from "./forward.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -413,6 +414,57 @@ function createMcpServer(): McpServer {
           {
             type: "text" as const,
             text: JSON.stringify({ account: email, status: "sent", ...sent }, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // ---- forward_email ----
+  server.tool(
+    "forward_email",
+    "Forward an email, with its attachments, from one connected account. Only recipients on the server owner's forwarding allowlist are accepted, and the owner may also limit which senders' emails can be forwarded; otherwise the call fails and nothing is sent. Sends immediately unless draft=true, which saves it in Drafts instead.",
+    {
+      account: z
+        .string()
+        .describe("Email address of the connected account the message belongs to (not 'all')"),
+      message_id: z.string().describe("The Gmail message ID to forward"),
+      to: z
+        .array(z.string())
+        .min(1)
+        .max(MAX_FORWARD_RECIPIENTS)
+        .describe("Recipients. Each must be on the server's forwarding allowlist."),
+      note: z
+        .string()
+        .max(5000)
+        .optional()
+        .describe("Optional text placed above the forwarded message"),
+      draft: z
+        .boolean()
+        .default(false)
+        .describe("true: save the forward in Drafts instead of sending it"),
+    },
+    async ({ account, message_id, to, note, draft }) => {
+      const email = singleAccount(account);
+      // Read at call time so the check can never be skipped; fails closed when unset.
+      const recipients = checkRecipients(to, parseAllowlist(process.env.FORWARD_ALLOWLIST));
+      const senders = parseAllowlist(process.env.FORWARD_ALLOWED_SENDERS);
+      const restrictSenders = senders.emails.size > 0 || senders.domains.size > 0;
+      const gmail = await getGmailServiceForAccount(email);
+      const result = await gmail.forwardEmail(message_id, recipients, {
+        note,
+        draft,
+        allowedSenders: restrictSenders ? senders : undefined,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              { account: email, status: draft ? "draft_created" : "sent", ...result },
+              null,
+              2
+            ),
           },
         ],
       };

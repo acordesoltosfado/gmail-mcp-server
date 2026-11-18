@@ -64,6 +64,7 @@ This Gmail MCP server turns any MCP-compatible AI client into a full-featured em
 | `apply_label` | Apply a label to an email. Creates the label if it doesn't exist |
 | `create_draft` | Create a draft (new or a reply in the thread). Nothing is sent |
 | `send_email` | Send a new email or reply, or send an existing draft by `draft_id` |
+| `forward_email` | Forward an email with its attachments, only to allowlisted recipients (and optionally only from allowlisted, DMARC-verified senders) |
 | `unsubscribe_email` | Unsubscribe from a mailing list (one-click POST or mailto), or return the link to click |
 | `batch_process` | Fetch a batch of emails for triage. Supports `account="all"` |
 
@@ -215,6 +216,24 @@ Connect as many Gmail accounts as you need. Every tool takes an `account` parame
 - *"Archive all promotional emails in user@gmail.com"*
 - *"Find newsletters in each of my accounts and unsubscribe"*
 - *"Find emails with attachments from the last week in work@gmail.com"*
+
+---
+
+## Forwarding Emails Safely
+
+`forward_email` forwards one email at a time, Gmail style (forwarded-message header, original text and HTML, all attachments). Two settings in `.env` limit what it can do, so an email that tricks the AI cannot make it forward your mail anywhere else:
+
+| Variable | Meaning |
+|---|---|
+| `FORWARD_ALLOWLIST` | Who forwards may go **to**: exact addresses, or `@domain.com` for a whole domain. Empty or missing turns forwarding off. |
+| `FORWARD_ALLOWED_SENDERS` | Optional. Only emails **from** these senders can be forwarded, and Gmail must confirm the sender is genuine (DMARC pass), so spoofed emails are refused. |
+
+```
+FORWARD_ALLOWLIST=bookings@your-inbound-address.example
+FORWARD_ALLOWED_SENDERS=partners@feverup.com,noreply@order.eventbrite.com
+```
+
+Restart the server after changing them. Pass `draft: true` to save the forward in Drafts instead of sending it. Gmail's size limit is about 25 MB per message.
 
 ---
 

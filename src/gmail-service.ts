@@ -1,4 +1,12 @@
 import { google, gmail_v1 } from "googleapis";
+import {
+  Allowlist,
+  buildForwardMime,
+  checkSender,
+  forwardSubject,
+  ForwardAttachment,
+  MAX_FORWARD_BYTES,
+} from "./forward.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -371,6 +379,120 @@ export class GmailService {
       bcc: splitAddresses(h("Bcc")),
       subject: h("Subject"),
     };
+  }
+
+  /**
+   * Forwards a message with its body and attachments, Gmail style.
+   * `to` must already be checked against the allowlist by the caller.
+   */
+  async forwardEmail(
+    messageId: string,
+    to: string[],
+    opts: { note?: string; draft?: boolean; allowedSenders?: Allowlist } = {}
+  ): Promise<ComposeResult & { attachments: string[]; sizeBytes: number }> {
+    const res = await this.gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
+    const payload = res.data.payload ?? {};
+    const hdrs = payload.headers ?? [];
+    // find() returns the first match: for Authentication-Results that is the one Gmail added.
+    const h = (n: string) => hdrs.find((x) => x.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+
+    if (opts.allowedSenders) {
+      checkSender(h("From"), h("Authentication-Results"), opts.allowedSenders);
+    }
+
+    // Walk the MIME tree: first plain and html bodies, everything else with a filename is an attachment.
+    let plain: string | undefined;
+    let html: string | undefined;
+    const attachments: ForwardAttachment[] = [];
+    const fetchData = async (part: gmail_v1.Schema$MessagePart): Promise<Buffer> => {
+      if (part.body?.data) return Buffer.from(part.body.data, "base64url");
+      if (part.body?.attachmentId) {
+        const a = await this.gmail.users.messages.attachments.get({
+          userId: "me",
+          messageId,
+          id: part.body.attachmentId,
+        });
+        return Buffer.from(a.data.data ?? "", "base64url");
+      }
+      return Buffer.alloc(0);
+    };
+    const walk = async (part: gmail_v1.Schema$MessagePart): Promise<void> => {
+      if (part.parts?.length) {
+        for (const p of part.parts) await walk(p);
+        return;
+      }
+      const ph = (n: string) =>
+        part.headers?.find((x) => x.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+      const isFile = !!part.filename || /^attachment/i.test(ph("Content-Disposition"));
+      if (!isFile && part.mimeType === "text/plain" && plain === undefined) {
+        plain = (await fetchData(part)).toString("utf8");
+      } else if (!isFile && part.mimeType === "text/html" && html === undefined) {
+        html = (await fetchData(part)).toString("utf8");
+      } else if (isFile || ph("Content-ID")) {
+        attachments.push({
+          filename: part.filename || "attachment",
+          mimeType: part.mimeType || "application/octet-stream",
+          contentId: ph("Content-ID") || undefined,
+          inline: /^inline/i.test(ph("Content-Disposition")),
+          data: await fetchData(part),
+        });
+      }
+    };
+    await walk(payload);
+
+    const mime = buildForwardMime({
+      to,
+      original: {
+        from: h("From"),
+        date: h("Date"),
+        subject: h("Subject"),
+        to: h("To"),
+        cc: h("Cc"),
+        messageId: h("Message-ID"),
+        references: h("References"),
+      },
+      note: opts.note,
+      plain,
+      html,
+      attachments,
+    });
+    const sizeBytes = Buffer.byteLength(mime);
+    if (sizeBytes > MAX_FORWARD_BYTES) {
+      throw new Error(
+        `Forward is ${(sizeBytes / 1048576).toFixed(1)} MB, above Gmail's 25 MB limit. Nothing was sent.`
+      );
+    }
+
+    // Media upload (not JSON "raw") so messages with attachments up to the Gmail limit go through.
+    const media = { mimeType: "message/rfc822", body: mime };
+    const threadId = res.data.threadId ?? undefined;
+    const meta = {
+      to,
+      cc: [] as string[],
+      bcc: [] as string[],
+      subject: forwardSubject(h("Subject")),
+      attachments: attachments.filter((a) => !a.inline).map((a) => a.filename),
+      sizeBytes,
+    };
+    if (opts.draft) {
+      const d = await this.gmail.users.drafts.create({
+        userId: "me",
+        requestBody: { message: { threadId } },
+        media,
+      });
+      return {
+        id: d.data.message?.id ?? "",
+        threadId: d.data.message?.threadId ?? "",
+        draftId: d.data.id ?? undefined,
+        ...meta,
+      };
+    }
+    const s = await this.gmail.users.messages.send({
+      userId: "me",
+      requestBody: { threadId },
+      media,
+    });
+    return { id: s.data.id ?? "", threadId: s.data.threadId ?? "", ...meta };
   }
 
   private async buildMessage(input: ComposeInput): Promise<{
